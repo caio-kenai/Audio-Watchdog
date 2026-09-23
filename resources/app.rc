@@ -1,0 +1,37 @@
+#include <windows.h>
+#include "resource.h"
+
+IDI_APP ICON "logo.ico"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION 1,0,0,0
+ PRODUCTVERSION 1,0,0,0
+ FILEFLAGSMASK 0x3fL
+#ifdef _DEBUG
+ FILEFLAGS 0x1L
+#else
+ FILEFLAGS 0x0L
+#endif
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "caio-kenai"
+            VALUE "FileDescription", "Audio Watchdog - prevents exclusive mode on audio endpoints"
+            VALUE "FileVersion", "1.0.0"
+            VALUE "InternalName", "AudioWatchdog"
+            VALUE "OriginalFilename", "AudioWatchdog.exe"
+            VALUE "ProductName", "Audio Watchdog"
+            VALUE "ProductVersion", "1.0.0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 caio-kenai"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

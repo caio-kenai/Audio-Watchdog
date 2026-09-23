@@ -1,0 +1,12 @@
+#pragma once
+#ifndef AUDIOWATCHDOG_VERSION_H
+#define AUDIOWATCHDOG_VERSION_H
+
+#define AWW_VERSION_MAJOR 1
+#define AWW_VERSION_MINOR 0
+#define AWW_VERSION_PATCH 0
+
+#define AWW_VERSION_STR "1.0.0"
+#define AWW_BUILD_STR     "audio-watchdog"
+
+#endif // AUDIOWATCHDOG_VERSION_H

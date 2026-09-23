@@ -1,0 +1,5 @@
+#include <windows.h>
+#include "setup_res.h"
+
+IDI_APP ICON "logo.ico"
+IDR_PAYLOAD RCDATA "AudioWatchdog.exe"

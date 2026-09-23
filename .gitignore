@@ -1,0 +1,44 @@
+# Compiler / binary output
+build/
+out/
+cmake-build-*/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.sdf
+x64/
+Debug/
+Release/
+
+# Build artifacts
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.aps
+*.iobj
+*.ipdb
+
+# Logs and local state
+logs/
+*.log
+
+# IDE
+.idea/
+*.swp
+*~
+
+# Tests
+*.test
+
+# Keep the top-level LICENSE/README tracked even if they could be ignored
+!LICENSE
+!README.md
