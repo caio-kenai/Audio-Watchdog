@@ -1,5 +1,25 @@
 #ifndef AUDIO_WATCHDOG_SETUP_RES_H
 #define AUDIO_WATCHDOG_SETUP_RES_H
 #include "resource.h"
-#define IDR_PAYLOAD 200
+
+#define IDR_PAYLOAD         200
+#define IDD_SETUP           300
+
+#define IDC_SETUP_ICON      3001
+#define IDC_SETUP_TITLE     3002
+#define IDC_SETUP_SUBTITLE  3003
+#define IDC_SETUP_EXCL      3010
+#define IDC_SETUP_EXCL_NOTE 3011
+#define IDC_SETUP_FORMAT    3012
+#define IDC_SETUP_RATE_LBL  3013
+#define IDC_SETUP_RATE      3014
+#define IDC_SETUP_BITS_LBL  3015
+#define IDC_SETUP_BITS      3016
+#define IDC_SETUP_FMT_NOTE  3017
+#define IDC_SETUP_DIR       3020
+#define IDC_SETUP_BROWSE    3021
+#define IDC_SETUP_LAUNCH    3022
+#define IDC_SETUP_PROGRESS  3030
+#define IDC_SETUP_STATUS    3031
+
 #endif

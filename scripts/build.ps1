@@ -1,4 +1,5 @@
-# Builds Audio Watchdog with CMake + Ninja + MSVC and runs the unit tests.
+# Builds Audio Watchdog (CMake + Ninja + MSVC), runs the unit tests and copies
+# the installer to dist\.
 # Usage:
 #   powershell -ExecutionPolicy Bypass -File scripts\build.ps1 [-Debug] [-SkipTests]
 param(
@@ -9,36 +10,47 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 $buildType = if ($Debug) { "Debug" } else { "Release" }
+$buildDir = Join-Path $root "build"
 
-# Locate a CMake (VS Build Tools bundles one).
-$cmakeCandidates = @(
-    "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
-    "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
-    "cmake.exe"
+# Visual Studio 2022 (Build Tools or Community) provides cl, rc, cmake and ninja.
+$vsRoots = @(
+    "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools",
+    "C:\Program Files\Microsoft Visual Studio\2022\Community",
+    "C:\Program Files\Microsoft Visual Studio\2022\Professional",
+    "C:\Program Files\Microsoft Visual Studio\2022\Enterprise"
 )
-$cmake = $cmakeCandidates | Where-Object { Get-Command $_ -ErrorAction SilentlyContinue } | Select-Object -First 1
-if (-not $cmake) { throw "CMake not found. Install Build Tools for Visual Studio 2022." }
+$vs = $vsRoots | Where-Object { Test-Path "$_\VC\Auxiliary\Build\vcvars64.bat" } | Select-Object -First 1
+if (-not $vs) { throw "Visual Studio 2022 (C++ workload) not found." }
+$vcvars = "$vs\VC\Auxiliary\Build\vcvars64.bat"
+$tools = "$vs\Common7\IDE\CommonExtensions\Microsoft\CMake"
+$env:PATH = "$tools\CMake\bin;$tools\Ninja;$env:PATH"
 
-# vcvars to make cl available for Ninja builds.
-$vcvars = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Auxiliary\Build\vcvars64.bat"
-if (-not (Test-Path $vcvars)) {
-    $vcvars = "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat"
+function Invoke-VS([string]$cmd) {
+    cmd /c "call `"$vcvars`" >nul 2>&1 && $cmd"
+    if ($LASTEXITCODE -ne 0) { throw "Command failed: $cmd" }
 }
-if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found." }
 
 Push-Location $root
 try {
-    cmd /c "call `"$vcvars`" >nul 2>&1 && `"$cmake`" -G Ninja -S . -B build -DCMAKE_BUILD_TYPE=$buildType"
-    if ($LASTEXITCODE -ne 0) { throw "CMake configure failed." }
-    cmd /c "call `"$vcvars`" >nul 2>&1 && `"$cmake`" --build build"
-    if ($LASTEXITCODE -ne 0) { throw "Build failed." }
-    Write-Host "Built: build\bin\AudioWatchdog.exe"
-    Write-Host "      build\bin\audiowatchdog_tests.exe"
+    Invoke-VS "cmake -G Ninja -S . -B `"$buildDir`" -DCMAKE_BUILD_TYPE=$buildType"
+    Invoke-VS "cmake --build `"$buildDir`""
 
     if (-not $SkipTests) {
-        & "$root\build\bin\audiowatchdog_tests.exe"
+        & "$buildDir\bin\audiowatchdog_tests.exe"
         if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
     }
+
+    $version = (Select-String -Path "$buildDir\generated\version.h" -Pattern 'AWW_VERSION_STR\s+"([^"]+)"').Matches[0].Groups[1].Value
+    $dist = Join-Path $root "dist"
+    New-Item -ItemType Directory -Force -Path $dist | Out-Null
+    Copy-Item "$buildDir\bin\AudioWatchdog-Setup.exe" "$dist\AudioWatchdog-Setup.exe" -Force
+    $hash = (Get-FileHash "$dist\AudioWatchdog-Setup.exe" -Algorithm SHA256).Hash
+    "$hash  AudioWatchdog-Setup.exe" | Set-Content "$dist\AudioWatchdog-Setup.exe.sha256" -Encoding ascii
+
+    Write-Host ""
+    Write-Host "Audio Watchdog $version ($buildType)"
+    Write-Host "  build\bin\AudioWatchdog.exe        app + service + CLI"
+    Write-Host "  dist\AudioWatchdog-Setup.exe       installer (SHA-256 $hash)"
 } finally {
     Pop-Location
 }

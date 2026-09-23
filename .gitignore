@@ -1,6 +1,8 @@
 # Compiler / binary output
 build/
+build-*/
 out/
+dist/
 cmake-build-*/
 
 # Visual Studio
