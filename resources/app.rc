@@ -1,11 +1,33 @@
 #include <windows.h>
 #include "resource.h"
+#include "version.h"
 
-IDI_APP ICON "logo.ico"
+#pragma code_page(65001)
+
+IDI_APP        ICON "logo.ico"
+IDI_APP_PAUSED ICON "logo-paused.ico"
+
+IDD_STATUS DIALOGEX 0, 0, 300, 170
+STYLE DS_SHELLFONT | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX
+EXSTYLE WS_EX_APPWINDOW
+CAPTION "Audio Watchdog"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    CONTROL         "", IDC_STATUS_ICON, "Static", SS_ICON | SS_REALSIZEIMAGE, 12, 12, 32, 32
+    LTEXT           "Audio Watchdog", IDC_STATUS_TITLE, 56, 12, 232, 12
+    LTEXT           "", IDC_STATUS_STATE, 56, 28, 232, 10
+    LTEXT           "", IDC_STATUS_EXCL, 12, 58, 276, 10
+    LTEXT           "", IDC_STATUS_FORMAT, 12, 72, 276, 10
+    LTEXT           "", IDC_STATUS_MODE, 12, 86, 276, 10
+    LTEXT           "", IDC_STATUS_LOGS, 12, 100, 276, 20, SS_PATHELLIPSIS
+    PUSHBUTTON      "Pausar monitoramento", IDC_STATUS_TOGGLE, 12, 146, 100, 16
+    PUSHBUTTON      "Abrir pasta de logs", IDC_STATUS_OPENLOGS, 118, 146, 90, 16
+    DEFPUSHBUTTON   "Fechar", IDOK, 238, 146, 50, 16
+END
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 1,0,0,0
- PRODUCTVERSION 1,0,0,0
+ FILEVERSION AWW_VERSION_RC
+ PRODUCTVERSION AWW_VERSION_RC
  FILEFLAGSMASK 0x3fL
 #ifdef _DEBUG
  FILEFLAGS 0x1L
@@ -21,13 +43,13 @@ BEGIN
         BLOCK "040904B0"
         BEGIN
             VALUE "CompanyName", "caio-kenai"
-            VALUE "FileDescription", "Audio Watchdog - prevents exclusive mode on audio endpoints"
-            VALUE "FileVersion", "1.0.0"
+            VALUE "FileDescription", "Audio Watchdog"
+            VALUE "FileVersion", AWW_VERSION_STR
             VALUE "InternalName", "AudioWatchdog"
             VALUE "OriginalFilename", "AudioWatchdog.exe"
             VALUE "ProductName", "Audio Watchdog"
-            VALUE "ProductVersion", "1.0.0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 caio-kenai"
+            VALUE "ProductVersion", AWW_VERSION_STR
+            VALUE "LegalCopyright", "Copyright (C) 2026 caio-kenai. AGPL-3.0."
         END
     END
     BLOCK "VarFileInfo"

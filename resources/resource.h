@@ -1,4 +1,19 @@
 #ifndef AUDIOWATCHDOG_RESOURCE_H
 #define AUDIOWATCHDOG_RESOURCE_H
-#define IDI_APP 101
+
+#define IDI_APP             101
+#define IDI_APP_PAUSED      102
+
+#define IDD_STATUS          201
+
+#define IDC_STATUS_ICON     1001
+#define IDC_STATUS_TITLE    1002
+#define IDC_STATUS_STATE    1003
+#define IDC_STATUS_EXCL     1004
+#define IDC_STATUS_FORMAT   1005
+#define IDC_STATUS_MODE     1006
+#define IDC_STATUS_LOGS     1007
+#define IDC_STATUS_TOGGLE   1010
+#define IDC_STATUS_OPENLOGS 1011
+
 #endif
