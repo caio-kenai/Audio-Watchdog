@@ -7,20 +7,39 @@
 
 namespace aw {
 
+// Folder that contains AudioWatchdog.exe (the install folder).
+std::wstring InstallDir();
+
+// Full path of the running executable.
+std::wstring ExecutablePath();
+
 // Base directory under ProgramData, e.g. C:\ProgramData\Audio Watchdog
 std::wstring ProgramDataDir();
 
-// Directory for log files (created on demand).
+// Log folder next to the executable, e.g. C:\Program Files\Audio Watchdog\logs
 std::wstring LogsDir();
 
-// Full path of the log file.
+// Log written by the Windows service (and the CLI / portable tray).
 std::wstring LogFilePath();
 
-// Full path of the configuration file.
+// Log written by the per-user tray application.
+std::wstring TrayLogFilePath();
+
+// Full path of the configuration file (under ProgramData).
 std::wstring ConfigFilePath();
 
-// Create the base directory if it does not exist. Returns false on failure.
+// Creates the ProgramData folder. Returns false on failure.
 bool EnsureProgramDataDirs();
+
+// Creates the logs folder. Returns false on failure.
+bool EnsureLogsDir();
+
+// Applies the folder ACLs used by an installed copy:
+//   config folder - SYSTEM/Administrators full control, users read-only
+//   logs folder   - SYSTEM/Administrators full control, users modify
+// Requires administrator rights; best effort.
+bool ApplyConfigDirAcl(const std::wstring& path);
+bool ApplyLogsDirAcl(const std::wstring& path);
 
 } // namespace aw
 

@@ -25,7 +25,9 @@ HRESULT ReadUi4(IPropertyStore* store, const PROPERTYKEY& key, bool& out) {
         if (var.vt == VT_UI4) {
             out = var.ulVal != 0;
         } else if (var.vt == VT_EMPTY) {
-            out = false; // absent -> interpreted as blocked
+            // Absent -> Windows applies its default, which is "allowed"
+            // (verified: a real exclusive stream opens on such endpoints).
+            out = true;
         } else {
             hr = HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
         }

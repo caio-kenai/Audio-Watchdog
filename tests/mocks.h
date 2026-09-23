@@ -85,4 +85,53 @@ public:
     HRESULT Write(const std::wstring&, bool, bool) override { return E_ACCESSDENIED; }
 };
 
+// In-memory default-format store.
+class MockFormatStore : public aw::IAudioFormatStore {
+public:
+    std::map<std::wstring, aw::AudioFormat> current;
+    // Supported layouts: (rate, validBits, containerBits, float).
+    struct Layout { std::uint32_t rate; std::uint16_t valid; std::uint16_t container; bool isFloat; };
+    std::vector<Layout> supported;
+    HRESULT readHr = S_OK;
+    HRESULT supportHr = S_OK;
+    HRESULT writeHr = S_OK;
+    bool writesStick = true;
+    int writeCalls = 0;
+    aw::AudioFormat lastWritten;
+
+    HRESULT GetDeviceFormat(const std::wstring& id, aw::AudioFormat& out) override {
+        if (FAILED(readHr)) return readHr;
+        auto it = current.find(id);
+        if (it == current.end()) return E_NOTFOUND;
+        out = it->second;
+        return S_OK;
+    }
+    HRESULT IsFormatSupported(const std::wstring&, const aw::AudioFormat& f, bool& ok) override {
+        ok = false;
+        if (FAILED(supportHr)) return supportHr;
+        for (const auto& l : supported) {
+            if (l.rate == f.sampleRate && l.valid == f.validBits && l.container == f.containerBits &&
+                l.isFloat == f.isFloat) {
+                ok = true;
+            }
+        }
+        return S_OK;
+    }
+    HRESULT SetDeviceFormat(const std::wstring& id, const aw::AudioFormat& f) override {
+        ++writeCalls;
+        lastWritten = f;
+        if (FAILED(writeHr)) return writeHr;
+        if (writesStick) current[id] = f;
+        return S_OK;
+    }
+};
+
+inline aw::AudioFormat Fmt(std::uint32_t rate, std::uint16_t valid, std::uint16_t container) {
+    aw::AudioFormat f;
+    f.sampleRate = rate;
+    f.validBits = valid;
+    f.containerBits = container;
+    return f;
+}
+
 } // namespace awtest

@@ -4,7 +4,6 @@
 
 #include <windows.h>
 #include <fstream>
-#include <sstream>
 
 namespace aw {
 
@@ -17,31 +16,61 @@ bool ParseBool(const std::wstring& v, bool fallback) {
     return fallback;
 }
 
-std::uint32_t ParseU32(const std::wstring& v, std::uint32_t fallback) {
-    if (v.empty()) return fallback;
+bool ParseNumber(const std::wstring& v, unsigned long long& out) {
+    if (v.empty()) return false;
     try {
-        unsigned long long n = std::stoull(v);
-        const unsigned long long max = 24ull * 3600ull; // cap at 86400 to avoid huge waits
-        if (n == 0) n = 1;
-        if (n > max) n = max;
-        return static_cast<std::uint32_t>(n);
+        size_t used = 0;
+        out = std::stoull(v, &used);
+        return used == v.size();
     } catch (...) {
-        return fallback;
+        return false;
     }
 }
 
+std::uint32_t ParseInterval(const std::wstring& v, std::uint32_t fallback) {
+    unsigned long long n = 0;
+    if (!ParseNumber(v, n)) return fallback;
+    const unsigned long long max = 24ull * 3600ull; // cap at 86400 to avoid huge waits
+    if (n == 0) n = 1;
+    if (n > max) n = max;
+    return static_cast<std::uint32_t>(n);
+}
+
+const wchar_t* BoolText(bool b) { return b ? L"true" : L"false"; }
+
 } // namespace
 
-Config LoadConfig(const std::wstring& path) {
+bool IsAllowedSampleRate(std::uint32_t rate) {
+    for (std::uint32_t r : kAllowedSampleRates) {
+        if (r == rate) return true;
+    }
+    return false;
+}
+
+bool IsAllowedBitDepth(std::uint32_t bits) {
+    for (std::uint16_t b : kAllowedBitDepths) {
+        if (b == bits) return true;
+    }
+    return false;
+}
+
+std::wstring DescribeFormatTarget(const Config& cfg) {
+    return FormatW(L"%u Hz / %u-bit", cfg.sampleRate, static_cast<unsigned>(cfg.bitDepth));
+}
+
+Config LoadConfig(const std::wstring& path, bool scaffold) {
     Config cfg;
 
     std::wifstream in(path, std::ios::in);
     if (!in.is_open()) {
         // Missing file -> defaults. Attempt to scaffold it.
-        SaveConfig(cfg, path);
+        if (scaffold) SaveConfig(cfg, path);
         return cfg;
     }
     in.imbue(std::locale::classic());
+
+    bool sawProtectionKey = false;
+    bool legacyExclusiveDisabled = false;
 
     std::wstring section;
     std::wstring line;
@@ -49,30 +78,57 @@ Config LoadConfig(const std::wstring& path) {
         std::wstring s = TrimView(line);
         if (s.empty() || s[0] == L';' || s[0] == L'#') continue;
         if (s.front() == L'[' && s.back() == L']') {
-            section = TrimView(s.substr(1, s.size() - 2));
+            section = ToLowerA(TrimView(s.substr(1, s.size() - 2)));
             continue;
         }
         const size_t eq = s.find(L'=');
         if (eq == std::wstring::npos) continue;
-        std::wstring key = TrimView(s.substr(0, eq));
+        const std::wstring key = ToLowerA(TrimView(s.substr(0, eq)));
         std::wstring value = TrimView(s.substr(eq + 1));
+        // Allow trailing inline comments ("Enforce=true ; comment").
+        const size_t sc = value.find(L';');
+        if (sc != std::wstring::npos) value = TrimView(value.substr(0, sc));
         const std::wstring fullKey = section + L"." + key;
 
-        if (fullKey == L"Monitor.Playback" || fullKey == L"monitor.Playback") {
+        unsigned long long n = 0;
+        if (fullKey == L"monitor.playback") {
             cfg.monitorPlayback = ParseBool(value, cfg.monitorPlayback);
-        } else if (fullKey == L"Monitor.Capture") {
+        } else if (fullKey == L"monitor.capture") {
             cfg.monitorCapture = ParseBool(value, cfg.monitorCapture);
-        } else if (fullKey == L"Monitor.CheckIntervalSeconds") {
-            cfg.checkIntervalSeconds = ParseU32(value, cfg.checkIntervalSeconds);
-        } else if (fullKey == L"Logging.Enable") {
+        } else if (fullKey == L"monitor.checkintervalseconds") {
+            cfg.checkIntervalSeconds = ParseInterval(value, cfg.checkIntervalSeconds);
+        } else if (fullKey == L"logging.enable") {
             cfg.enableLogging = ParseBool(value, cfg.enableLogging);
-        } else if (fullKey == L"Logging.Level") {
+        } else if (fullKey == L"logging.level") {
             cfg.logLevel = ParseLogLevel(value);
-        } else if (fullKey == L"Behavior.Enforce") {
+        } else if (fullKey == L"behavior.enforce") {
             cfg.enforce = ParseBool(value, cfg.enforce);
-        } else if (fullKey == L"Behavior.ExclusiveModeDisabled") {
-            cfg.exclusiveDisabled = ParseBool(value, cfg.exclusiveDisabled);
+        } else if (fullKey == L"behavior.exclusivemodedisabled") {
+            // Legacy (v1.0) key, superseded by Features.ExclusiveModeProtection.
+            legacyExclusiveDisabled = ParseBool(value, false);
+        } else if (fullKey == L"features.exclusivemodeprotection") {
+            cfg.exclusiveModeProtection = ParseBool(value, cfg.exclusiveModeProtection);
+            sawProtectionKey = true;
+        } else if (fullKey == L"features.formatstandardization") {
+            cfg.formatStandardization = ParseBool(value, cfg.formatStandardization);
+        } else if (fullKey == L"features.samplerate") {
+            if (ParseNumber(value, n) && IsAllowedSampleRate(static_cast<std::uint32_t>(n))) {
+                cfg.sampleRate = static_cast<std::uint32_t>(n);
+            } else {
+                Logger::Instance().Warn(L"config: SampleRate=" + value +
+                                        L" is not supported (use 44100 or 48000); using 48000.");
+            }
+        } else if (fullKey == L"features.bitdepth") {
+            if (ParseNumber(value, n) && IsAllowedBitDepth(static_cast<std::uint32_t>(n))) {
+                cfg.bitDepth = static_cast<std::uint16_t>(n);
+            } else {
+                Logger::Instance().Warn(L"config: BitDepth=" + value +
+                                        L" is not supported (use 16, 24 or 32); using 24.");
+            }
         }
+    }
+    if (!sawProtectionKey && legacyExclusiveDisabled) {
+        cfg.exclusiveModeProtection = false;
     }
     return cfg;
 }
@@ -85,31 +141,40 @@ bool SaveConfig(const Config& cfg, const std::wstring& path) {
         ::CreateDirectoryW(dir.c_str(), nullptr);
     }
 
-    // Write as UTF-8 for correct display of accents in comments.
-    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    std::ofstream out(path, std::ios::out | std::ios::trunc | std::ios::binary);
     if (!out.is_open()) return false;
 
     auto dump = [&](const std::wstring& s) {
         const std::string utf8 = Utf8FromWide(s);
         out.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
-        out.put('\n');
+        out.write("\r\n", 2);
     };
 
     dump(L"; Audio Watchdog configuration");
-    dump(L"; Created automatically on first run. Edit while the service is stopped.");
+    dump(L"; Changes are picked up when the service restarts or when monitoring is resumed.");
+    dump(L"");
+    dump(L"[Features]");
+    dump(L"; Keep \"Allow applications to take exclusive control\" disabled (main feature).");
+    dump(std::wstring(L"ExclusiveModeProtection=") + BoolText(cfg.exclusiveModeProtection));
+    dump(L"; Keep every endpoint's default format at SampleRate/BitDepth when supported.");
+    dump(std::wstring(L"FormatStandardization=") + BoolText(cfg.formatStandardization));
+    dump(L"; 44100 | 48000");
+    dump(L"SampleRate=" + std::to_wstring(cfg.sampleRate));
+    dump(L"; 16 | 24 | 32");
+    dump(L"BitDepth=" + std::to_wstring(cfg.bitDepth));
     dump(L"");
     dump(L"[Monitor]");
-    dump(L"Playback=" + (cfg.monitorPlayback ? WString(L"true") : WString(L"false")));
-    dump(L"Capture=" + (cfg.monitorCapture ? WString(L"true") : WString(L"false")));
+    dump(std::wstring(L"Playback=") + BoolText(cfg.monitorPlayback));
+    dump(std::wstring(L"Capture=") + BoolText(cfg.monitorCapture));
     dump(L"CheckIntervalSeconds=" + std::to_wstring(cfg.checkIntervalSeconds));
     dump(L"");
     dump(L"[Logging]");
-    dump(L"Enable=" + (cfg.enableLogging ? WString(L"true") : WString(L"false")));
+    dump(std::wstring(L"Enable=") + BoolText(cfg.enableLogging));
     dump(L"Level=" + LogLevelName(cfg.logLevel));
     dump(L"");
     dump(L"[Behavior]");
-    dump(L"Enforce=" + (cfg.enforce ? WString(L"true") : WString(L"false")));
-    dump(L"ExclusiveModeDisabled=" + (cfg.exclusiveDisabled ? WString(L"true") : WString(L"false")));
+    dump(L"; false = report only, never modify any device.");
+    dump(std::wstring(L"Enforce=") + BoolText(cfg.enforce));
     out.flush();
     return out.good();
 }

@@ -3,6 +3,7 @@
 #ifndef AUDIOWATCHDOG_AUDIOTYPES_H
 #define AUDIOWATCHDOG_AUDIOTYPES_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -57,6 +58,35 @@ public:
 
     // Writes both settings persistently.
     virtual HRESULT Write(const std::wstring& id, bool allow, bool priority) = 0;
+};
+
+// PCM/float sample format of an endpoint's shared-mode "Default Format".
+struct AudioFormat {
+    std::uint32_t sampleRate = 0;
+    std::uint16_t validBits = 0;     // bit depth shown in the Sound panel
+    std::uint16_t containerBits = 0; // storage size per sample (24 may live in 32)
+    bool isFloat = false;
+    std::uint16_t channels = 2;
+    std::uint32_t channelMask = 0x3; // SPEAKER_FRONT_LEFT | SPEAKER_FRONT_RIGHT
+};
+
+// Abstraction over the per-endpoint default (shared-mode) format.
+class IAudioFormatStore {
+public:
+    virtual ~IAudioFormatStore() = default;
+
+    // Reads the endpoint's current default format.
+    virtual HRESULT GetDeviceFormat(const std::wstring& id, AudioFormat& out) = 0;
+
+    // Asks the driver whether it can stream `fmt`. This is answered by the
+    // device itself and does not depend on the exclusive-mode policy.
+    // Returns a failure HRESULT when support cannot be determined.
+    virtual HRESULT IsFormatSupported(const std::wstring& id, const AudioFormat& fmt,
+                                      bool& supported) = 0;
+
+    // Makes `fmt` the endpoint's default format (applied by the audio engine
+    // immediately, exactly like the Sound control panel does).
+    virtual HRESULT SetDeviceFormat(const std::wstring& id, const AudioFormat& fmt) = 0;
 };
 
 } // namespace aw

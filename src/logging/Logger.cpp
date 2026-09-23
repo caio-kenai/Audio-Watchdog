@@ -49,6 +49,7 @@ void Logger::Configure(const std::wstring& filePath, LogLevel level, bool alsoCo
     level_ = level;
     console_ = alsoConsole;
     fileSize_ = 0;
+    rotateAt_ = kMaxFileBytes;
     OpenFile();
 }
 
@@ -74,7 +75,7 @@ void Logger::OpenFile() {
 }
 
 void Logger::RotateIfNeeded() {
-    if (!file_ || fileSize_ < kMaxFileBytes) return;
+    if (!file_ || fileSize_ < rotateAt_) return;
 
     std::fflush(file_);
     std::fclose(file_);
@@ -89,14 +90,17 @@ void Logger::RotateIfNeeded() {
     }
     std::wstring first = FormatW(L"%s.1", filePath_.c_str());
     ::DeleteFileW(first.c_str());
-    ::MoveFileW(filePath_.c_str(), first.c_str());
+    const bool rotated = ::MoveFileW(filePath_.c_str(), first.c_str()) != FALSE;
 
     fileSize_ = 0;
     OpenFile();
+    // If the file could not be renamed (another process holds it), do not
+    // retry on every single line; try again after another megabyte.
+    rotateAt_ = rotated ? kMaxFileBytes : fileSize_ + 1024 * 1024;
 }
 
 void Logger::Log(LogLevel level, const std::wstring& message) {
-    if (static_cast<int>(level) < static_cast<int>(level_)) return;
+    if (static_cast<int>(level) < static_cast<int>(level_.load())) return;
 
     const std::wstring line = LogLineToString(LogLevelName(level), message);
     const std::string utf8 = Utf8FromWide(line);

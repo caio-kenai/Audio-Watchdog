@@ -3,6 +3,7 @@
 #ifndef AUDIOWATCHDOG_LOGGER_H
 #define AUDIOWATCHDOG_LOGGER_H
 
+#include <atomic>
 #include <string>
 #include <mutex>
 #include <cstdio>
@@ -54,10 +55,11 @@ private:
 
     std::mutex       mutex_;
     std::wstring     filePath_;
-    LogLevel         level_ = LogLevel::Info;
+    std::atomic<LogLevel> level_{LogLevel::Info};
     bool             console_ = false;
     FILE*            file_ = nullptr;
     std::int64_t     fileSize_ = 0;
+    std::int64_t     rotateAt_ = kMaxFileBytes; // raised when a rotation fails
     static constexpr std::int64_t kMaxFileBytes = 5 * 1024 * 1024;   // 5 MB
     static constexpr int          kMaxRotatedFiles = 5;              // keep 5 old copies
 };

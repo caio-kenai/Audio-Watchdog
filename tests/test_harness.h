@@ -47,6 +47,9 @@ inline void CheckNearImpl(long long a, long long b, long long tol, const char* f
     }
 }
 
+// Path of a scratch file under %TEMP% (portable across machines).
+std::wstring TempFile(const wchar_t* name);
+
 } // namespace awtest
 
 #define TEST(name) \

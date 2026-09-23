@@ -4,7 +4,15 @@
 #include <iostream>
 #include <fstream>
 
+#include <windows.h>
+
 namespace awtest {
+
+std::wstring TempFile(const wchar_t* name) {
+    wchar_t dir[MAX_PATH] = {};
+    ::GetTempPathW(MAX_PATH, dir);
+    return std::wstring(dir) + name;
+}
 
 std::vector<TestCase>& RegisteredTests() {
     static std::vector<TestCase> tests;
@@ -18,8 +26,7 @@ Registrar::Registrar(const char* name, std::function<void()> fn) {
 int RunAllTests() {
     int passed = 0;
     int failed = 0;
-    std::ofstream trace("C:\\Users\\CAIO_DEV\\AppData\\Local\\Temp\\opencode\\aww_testtrace.txt",
-                        std::ios::out | std::ios::trunc);
+    std::ofstream trace(TempFile(L"aww_testtrace.txt"), std::ios::out | std::ios::trunc);
     for (const auto& t : RegisteredTests()) {
         trace << "RUN " << t.name << "\n";
         trace.flush();

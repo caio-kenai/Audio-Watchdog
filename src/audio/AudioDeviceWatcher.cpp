@@ -5,14 +5,6 @@
 
 namespace aw {
 
-namespace {
-
-void NotifyOnce(std::function<void()> fn) {
-    if (fn) fn();
-}
-
-} // namespace
-
 AudioDeviceWatcher::~AudioDeviceWatcher() {
     Stop();
 }
@@ -33,110 +25,99 @@ ULONG STDMETHODCALLTYPE AudioDeviceWatcher::AddRef() {
 }
 
 ULONG STDMETHODCALLTYPE AudioDeviceWatcher::Release() {
-    const ULONG n = --refCount_;
-    if (n == 0) delete this;
-    return n;
+    // Lifetime is managed by the owner (see header), never deleted here.
+    return --refCount_;
 }
 
-HRESULT AudioDeviceWatcher::OnDeviceStateChanged(LPCWSTR, DWORD) {
-    Notify();
+HRESULT AudioDeviceWatcher::OnDeviceStateChanged(LPCWSTR id, DWORD state) {
+    Notify(DeviceChange::Kind::StateChanged, id, state);
     return S_OK;
 }
 
-HRESULT AudioDeviceWatcher::OnDeviceAdded(LPCWSTR) {
-    Notify();
+HRESULT AudioDeviceWatcher::OnDeviceAdded(LPCWSTR id) {
+    Notify(DeviceChange::Kind::Added, id);
     return S_OK;
 }
 
-HRESULT AudioDeviceWatcher::OnDeviceRemoved(LPCWSTR) {
-    Notify();
+HRESULT AudioDeviceWatcher::OnDeviceRemoved(LPCWSTR id) {
+    Notify(DeviceChange::Kind::Removed, id);
     return S_OK;
 }
 
-HRESULT AudioDeviceWatcher::OnDefaultDeviceChanged(EDataFlow, ERole, LPCWSTR) {
-    Notify();
+HRESULT AudioDeviceWatcher::OnDefaultDeviceChanged(EDataFlow, ERole, LPCWSTR id) {
+    Notify(DeviceChange::Kind::DefaultChanged, id);
     return S_OK;
 }
 
-HRESULT AudioDeviceWatcher::OnPropertyValueChanged(LPCWSTR, const PROPERTYKEY) {
-    Notify();
+HRESULT AudioDeviceWatcher::OnPropertyValueChanged(LPCWSTR id, const PROPERTYKEY) {
+    Notify(DeviceChange::Kind::PropertyChanged, id);
     return S_OK;
 }
 
-void AudioDeviceWatcher::Notify() {
-    NotifyOnce(onChanged_);
+void AudioDeviceWatcher::Notify(DeviceChange::Kind kind, LPCWSTR id, DWORD state) {
+    // Callbacks can arrive until UnregisterEndpointNotificationCallback
+    // returns; `delivering_` is cleared before that call so late events are
+    // dropped instead of reaching an owner that is shutting down.
+    if (!delivering_ || !onChanged_) return;
+    DeviceChange change;
+    change.kind = kind;
+    change.id = id ? id : L"";
+    change.newState = state;
+    try {
+        onChanged_(change);
+    } catch (...) {
+        // Never let an exception cross the COM boundary into the audio service.
+    }
 }
 
 DWORD WINAPI AudioDeviceWatcher::ThreadProc(LPVOID arg) {
-    auto* self = static_cast<AudioDeviceWatcher*>(arg);
-    self->ThreadMain();
+    static_cast<AudioDeviceWatcher*>(arg)->ThreadMain();
     return 0;
 }
 
 void AudioDeviceWatcher::ThreadMain() {
-    HRESULT hr = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
-        running_ = false;
-        ::SetEvent(stopEvent_);
-        Logger::Instance().Error(L"AudioDeviceWatcher: CoInitializeEx failed: " + HrText(hr));
-        return;
-    }
-    const bool needCoUninit = SUCCEEDED(hr);
-
-    hr = ::CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                            __uuidof(IMMDeviceEnumerator), enumerator_.putVoid());
-    if (FAILED(hr)) {
-        Logger::Instance().Error(L"AudioDeviceWatcher: cannot create MMDeviceEnumerator: " + HrText(hr));
-        if (needCoUninit) ::CoUninitialize();
-        running_ = false;
-        ::SetEvent(stopEvent_);
+    // IMMNotificationClient callbacks are delivered on audio-service threads,
+    // not through this thread's apartment, so a plain MTA without a message
+    // pump is correct and nothing needs to be polled.
+    const HRESULT init = ::CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(init) && init != RPC_E_CHANGED_MODE) {
+        Logger::Instance().Error(L"AudioDeviceWatcher: CoInitializeEx failed: " + HrText(init));
         return;
     }
 
-    hr = enumerator_->RegisterEndpointNotificationCallback(this);
-    if (FAILED(hr)) {
-        Logger::Instance().Error(L"AudioDeviceWatcher: RegisterEndpointNotificationCallback failed: " +
-                                 HrText(hr));
-        enumerator_.reset();
-        if (needCoUninit) ::CoUninitialize();
-        running_ = false;
-        ::SetEvent(stopEvent_);
-        return;
-    }
-
-    Logger::Instance().Info(L"AudioDeviceWatcher: listening for device changes");
-
-    // Pump messages while waiting for the stop signal. Notifications are
-    // delivered on this thread by the COM apartment.
-    while (running_) {
-        MSG msg{};
-        while (::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
-            ::TranslateMessage(&msg);
-            ::DispatchMessageW(&msg);
+    {
+        ComPtr<IMMDeviceEnumerator> enumerator;
+        HRESULT hr = ::CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                        __uuidof(IMMDeviceEnumerator), enumerator.putVoid());
+        if (SUCCEEDED(hr)) {
+            delivering_ = true;
+            hr = enumerator->RegisterEndpointNotificationCallback(this);
+            if (FAILED(hr)) delivering_ = false;
         }
-        const DWORD wait = ::MsgWaitForMultipleObjects(1, &stopEvent_, FALSE, 500, QS_ALLINPUT);
-        if (wait == WAIT_OBJECT_0) break;
+
+        if (FAILED(hr)) {
+            Logger::Instance().Error(L"AudioDeviceWatcher: cannot listen for device changes: " +
+                                     HrText(hr) + L" (periodic checks still run).");
+        } else {
+            Logger::Instance().Info(L"AudioDeviceWatcher: listening for device changes");
+            ::WaitForSingleObject(stopEvent_, INFINITE);
+            delivering_ = false;
+            enumerator->UnregisterEndpointNotificationCallback(this);
+        }
     }
 
-    if (enumerator_) {
-        enumerator_->UnregisterEndpointNotificationCallback(this);
-        enumerator_.reset();
-    }
-    if (needCoUninit) ::CoUninitialize();
+    if (SUCCEEDED(init)) ::CoUninitialize();
 }
 
-bool AudioDeviceWatcher::Start(std::function<void()> onChanged) {
+bool AudioDeviceWatcher::Start(std::function<void(const DeviceChange&)> onChanged) {
     Stop();
 
     stopEvent_ = ::CreateEventW(nullptr, TRUE, FALSE, nullptr);
     if (!stopEvent_) return false;
 
     onChanged_ = std::move(onChanged);
-    running_ = true;
-
     thread_ = ::CreateThread(nullptr, 0, ThreadProc, this, 0, nullptr);
     if (!thread_) {
-        running_ = false;
         ::CloseHandle(stopEvent_);
         stopEvent_ = nullptr;
         return false;
@@ -145,12 +126,10 @@ bool AudioDeviceWatcher::Start(std::function<void()> onChanged) {
 }
 
 void AudioDeviceWatcher::Stop() {
-    running_ = false;
     if (stopEvent_) ::SetEvent(stopEvent_);
     if (thread_) {
-        if (::WaitForSingleObject(thread_, 3000) == WAIT_TIMEOUT) {
-            ::TerminateThread(thread_, 0);
-        }
+        // Unregistering waits for in-flight callbacks, which are short.
+        ::WaitForSingleObject(thread_, INFINITE);
         ::CloseHandle(thread_);
         thread_ = nullptr;
     }

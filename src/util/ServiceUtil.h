@@ -16,10 +16,12 @@ constexpr wchar_t kServiceDisplayName[] = L"Audio Watchdog";
 
 // Description shown in the Services console.
 constexpr wchar_t kServiceDescription[] =
-    L"Monitors Windows audio endpoints and prevents applications from using exclusive audio mode.";
+    L"Monitors Windows audio devices and prevents applications from using exclusive audio mode.";
 
-// Installs the service. `binaryPath` should include the quoted path to the
-// executable plus any optional arguments. Returns true on success.
+// Installs the service, or updates the configuration of an existing one
+// (binary path, start type, description, recovery actions, permissions).
+// `binaryPath` should include the quoted path to the executable plus any
+// optional arguments. Returns true on success.
 bool InstallService(const std::wstring& binaryPath, std::wstring* errorOut = nullptr);
 
 // Removes the service. Returns true if it no longer exists (already removed)
@@ -35,6 +37,14 @@ bool StopService(std::wstring* errorOut = nullptr);
 
 // Convenience: start if stopped, or restart if running.
 bool RestartService(std::wstring* errorOut = nullptr);
+
+// Pauses / resumes monitoring through the SCM (SERVICE_CONTROL_PAUSE /
+// SERVICE_CONTROL_CONTINUE). Interactive users are allowed to do this.
+bool PauseService(std::wstring* errorOut = nullptr);
+bool ContinueService(std::wstring* errorOut = nullptr);
+
+// True when the service is registered with the SCM.
+bool ServiceExists();
 
 // Query the current service status. Returns false if the service does not
 // exist or the query fails; otherwise fills state/description.

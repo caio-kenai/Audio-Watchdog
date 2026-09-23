@@ -9,7 +9,9 @@
 #include "core/WatchdogEngine.h"
 #include "audio/CoreAudioDeviceLister.h"
 #include "audio/ExclusiveModeStore.h"
+#include "audio/AudioFormatStore.h"
 #include "cli/Diagnostic.h"
+#include "version.h"
 
 #include <windows.h>
 #include <shellapi.h>
@@ -18,14 +20,6 @@
 namespace aw {
 
 namespace {
-
-constexpr wchar_t kVersion[] = L"1.0.0";
-
-std::wstring ExecutablePath() {
-    wchar_t buf[MAX_PATH] = {};
-    DWORD n = ::GetModuleFileNameW(nullptr, buf, MAX_PATH);
-    return n > 0 ? std::wstring(buf) : L"";
-}
 
 bool IsElevated() {
     BOOL elevated = FALSE;
@@ -42,10 +36,17 @@ bool IsElevated() {
 // Re-launches the process elevated and exits. Returns true if relaunched.
 bool RelaunchElevated() {
     const std::wstring exe = ExecutablePath();
-    const std::wstring cmd = ::GetCommandLineW();
-    HINSTANCE r = ::ShellExecuteW(nullptr, L"runas", exe.c_str(),
-                                  cmd.substr(cmd.find(exe) + exe.size()).c_str(),
-                                  nullptr, SW_HIDE);
+    // Re-issue the same arguments (everything after argv[0]).
+    int argc = 0;
+    wchar_t** argv = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
+    std::wstring params;
+    for (int i = 1; argv && i < argc; ++i) {
+        if (!params.empty()) params += L' ';
+        params += L"\"" + std::wstring(argv[i]) + L"\"";
+    }
+    if (argv) ::LocalFree(argv);
+    HINSTANCE r = ::ShellExecuteW(nullptr, L"runas", exe.c_str(), params.c_str(),
+                                  nullptr, SW_SHOWNORMAL);
     if (reinterpret_cast<INT_PTR>(r) > 32) {
         std::wcout << L"Administrator approval requested in a separate window.\n";
         return true;
@@ -62,7 +63,7 @@ bool RequireAdmin(const wchar_t* what) {
 }
 
 int CmdVersion() {
-    std::wcout << L"Audio Watchdog version " << kVersion << L"\n";
+    std::wcout << L"Audio Watchdog version " << AWW_VERSION_WSTR << L"\n";
     return 0;
 }
 
@@ -74,7 +75,11 @@ int CmdInstall() {
         std::wcout << L"Install failed: " << err << L"\n";
         return 1;
     }
-    std::wcout << L"Installed. Use: AudioWatchdog start\n";
+    EnsureProgramDataDirs();
+    ApplyConfigDirAcl(ProgramDataDir());
+    EnsureLogsDir();
+    ApplyLogsDirAcl(LogsDir());
+    std::wcout << L"Installed (or updated). Use: AudioWatchdog start\n";
     return 0;
 }
 
@@ -122,6 +127,26 @@ int CmdRestart() {
     return 0;
 }
 
+int CmdPause() {
+    std::wstring err;
+    if (!PauseService(&err)) {
+        std::wcout << L"Pause failed: " << err << L"\n";
+        return 1;
+    }
+    std::wcout << L"Monitoring paused.\n";
+    return 0;
+}
+
+int CmdResume() {
+    std::wstring err;
+    if (!ContinueService(&err)) {
+        std::wcout << L"Resume failed: " << err << L"\n";
+        return 1;
+    }
+    std::wcout << L"Monitoring resumed (full scan scheduled).\n";
+    return 0;
+}
+
 int CmdStatus() {
     std::wstring err;
     if (!aw::PrintServiceStatus(&err)) return 1;
@@ -135,14 +160,23 @@ int CmdScan() {
         return 2;
     }
     Config cfg = LoadConfig(ConfigFilePath());
+    Logger::Instance().Configure(L"", cfg.logLevel, true);
     CoreAudioDeviceLister lister;
     ExclusiveModeStore store;
-    WatchdogEngine engine(lister, store, cfg);
+    AudioFormatStore formatStore;
+    WatchdogEngine engine(lister, store, formatStore, cfg);
     ScanReport rep = engine.ScanOnce();
-    std::wcout << L"Scan complete: " << rep.endpointsScanned << L" endpoint(s) | already off: "
-               << rep.alreadyOff << L" | fixed: " << rep.fixed << L" | failed: " << rep.failed
-               << L" | skipped: " << rep.skipped << L"\n";
-    return rep.failed > 0 ? 1 : 0;
+    std::wcout << L"Scan complete: " << rep.endpointsScanned << L" endpoint(s)\n"
+               << L"  exclusive mode : already off " << rep.alreadyOff << L" | fixed " << rep.fixed
+               << L" | failed " << rep.failed << L" | skipped " << rep.skipped << L"\n";
+    if (cfg.formatStandardization) {
+        std::wcout << L"  format " << DescribeFormatTarget(cfg) << L" : ok " << rep.formatCompliant
+                   << L" | applied " << rep.formatApplied << L" | unsupported "
+                   << rep.formatUnsupported << L" | failed " << rep.formatFailed << L"\n";
+    } else {
+        std::wcout << L"  format standardization disabled\n";
+    }
+    return (rep.failed + rep.formatFailed) > 0 ? 1 : 0;
 }
 
 int CmdDevices() {
@@ -171,8 +205,10 @@ void PrintUsage() {
                << L"  stop               Stop the service\n"
                << L"  restart            Restart the service\n"
                << L"  status             Show the service status\n"
+               << L"  pause              Pause monitoring (nothing is modified while paused)\n"
+               << L"  resume             Resume monitoring and run a full scan\n"
                << L"  scan               Run one enforcement pass (connection-safe)\n"
-               << L"  devices            List audio endpoints and their exclusive state\n"
+               << L"  devices            List audio endpoints, exclusive state and formats\n"
                << L"  diagnose           Full self-check of the environment\n"
                << L"                      --probe-exclusive  also opens a real WASAPI stream\n"
                << L"  version            Show version\n"
@@ -195,6 +231,8 @@ int RunCli(int argc, wchar_t** argv) {
     if (cmd == L"stop") return CmdStop();
     if (cmd == L"restart") return CmdRestart();
     if (cmd == L"status") return CmdStatus();
+    if (cmd == L"pause") return CmdPause();
+    if (cmd == L"resume") return CmdResume();
     if (cmd == L"scan") return CmdScan();
     if (cmd == L"devices") return CmdDevices();
     if (cmd == L"diagnose") return CmdDiagnose(argc, argv);

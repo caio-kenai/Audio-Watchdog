@@ -6,9 +6,12 @@
 #include "audio/CoreAudioDeviceLister.h"
 #include "audio/ExclusiveModeStore.h"
 #include "audio/ExclusiveModeManager.h"
+#include "audio/AudioFormatStore.h"
+#include "audio/FormatManager.h"
 #include "core/WatchdogEngine.h"
 #include "config/Config.h"
 #include "logging/Logger.h"
+#include "version.h"
 
 #include <windows.h>
 #include <audiopolicy.h>
@@ -65,6 +68,18 @@ void PrintEndpoint(const EndpointInfo& e) {
     } else {
         std::wcout << L"       exclusive mode = unknown (" << HrText(e.exclusiveReadHr) << L")\n";
     }
+    if (e.deviceState != DEVICE_STATE_ACTIVE) return;
+    AudioFormatStore formats;
+    AudioFormat current;
+    const HRESULT hr = formats.GetDeviceFormat(e.id, current);
+    if (FAILED(hr)) {
+        std::wcout << L"       default format = unknown (" << HrText(hr) << L")\n";
+        return;
+    }
+    std::wcout << L"       default format = " << DescribeFormat(current)
+               << (current.isFloat ? L" float" : L"") << L", " << current.channels << L" ch\n";
+    FormatManager fm(formats);
+    std::wcout << L"       supported      = " << fm.DescribeSupported(e.id, current) << L"\n";
 }
 
 void ListEndpointsWithState() {
@@ -142,6 +157,7 @@ void PrintEnvironment() {
     std::wcout << L"Elevated           : " << (elevated ? L"yes" : L"no") << L"\n";
     std::wcout << L"Config             : " << ConfigFilePath() << L"\n";
     std::wcout << L"Logs               : " << LogsDir() << L"\n";
+    std::wcout << L"Version            : " << AWW_VERSION_WSTR << L"\n";
 }
 
 int RunDevicesCommand() {
@@ -207,7 +223,10 @@ int RunDiagnoseCommand(bool probeExclusive) {
     std::wcout << L"  monitorCapture       = " << (cfg.monitorCapture ? L"true" : L"false") << L"\n";
     std::wcout << L"  checkIntervalSeconds = " << cfg.checkIntervalSeconds << L"\n";
     std::wcout << L"  enforce              = " << (cfg.enforce ? L"true" : L"false") << L"\n";
-    std::wcout << L"  exclusiveModeDisabled= " << (cfg.exclusiveDisabled ? L"true" : L"false") << L"\n";
+    std::wcout << L"  exclusive protection = " << (cfg.exclusiveModeProtection ? L"ENABLED" : L"DISABLED") << L"\n";
+    std::wcout << L"  format standardize   = "
+               << (cfg.formatStandardization ? L"ENABLED (" + DescribeFormatTarget(cfg) + L")" : std::wstring(L"DISABLED"))
+               << L"\n";
 
     return 0;
 }

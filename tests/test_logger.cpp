@@ -9,7 +9,7 @@
 using namespace aw;
 
 static std::wstring TempLogPath() {
-    return L"C:\\Users\\CAIO_DEV\\AppData\\Local\\Temp\\opencode\\aww_test_log.log";
+    return awtest::TempFile(L"aww_test_log.log");
 }
 
 static std::string ReadUtf8File(const std::wstring& path) {
@@ -34,6 +34,7 @@ TEST(Logger_WritesFileWithLevelFiltering) {
     CHECK(content.find("should not appear") == std::string::npos);
     CHECK(content.find("warning appears") != std::string::npos);
     CHECK(content.find("error appears") != std::string::npos);
+    log.Configure(L"", LogLevel::Info, false); // release the file for the next tests
     ::DeleteFileW(path.c_str());
 }
 

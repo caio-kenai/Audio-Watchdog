@@ -4,6 +4,7 @@
 
 #include <windows.h>
 #include <winsvc.h>
+#include <sddl.h>
 #include <iostream>
 
 namespace aw {
@@ -27,7 +28,7 @@ SC_HANDLE OpenServiceHandle(const wchar_t* service, DWORD access) {
 } // namespace
 
 bool InstallService(const std::wstring& binaryPath, std::wstring* errorOut) {
-    SC_HANDLE scm = ::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CREATE_SERVICE);
+    SC_HANDLE scm = ::OpenSCManagerW(nullptr, nullptr, SC_MANAGER_CONNECT | SC_MANAGER_CREATE_SERVICE);
     if (!scm) {
         if (errorOut) *errorOut = FormatSystemError(::GetLastError());
         return false;
@@ -35,61 +36,74 @@ bool InstallService(const std::wstring& binaryPath, std::wstring* errorOut) {
 
     SC_HANDLE svc = ::OpenServiceW(scm, kServiceName, SERVICE_ALL_ACCESS);
     if (svc) {
-        ::CloseServiceHandle(svc);
-        ::CloseServiceHandle(scm);
-        if (errorOut) *errorOut = L"Service already installed. Run `AudioWatchdog uninstall` first.";
-        return false;
+        // Upgrade in place: keep the registration, refresh its configuration.
+        if (!::ChangeServiceConfigW(svc, SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START,
+                                    SERVICE_ERROR_NORMAL, binaryPath.c_str(), nullptr, nullptr,
+                                    L"\0", L"LocalSystem", nullptr, kServiceDisplayName)) {
+            if (errorOut) *errorOut = FormatSystemError(::GetLastError());
+            ::CloseServiceHandle(svc);
+            ::CloseServiceHandle(scm);
+            return false;
+        }
+    } else {
+        const DWORD err = ::GetLastError();
+        if (err != ERROR_SERVICE_DOES_NOT_EXIST) {
+            if (errorOut) *errorOut = FormatSystemError(err);
+            ::CloseServiceHandle(scm);
+            return false;
+        }
+        // No dependencies: the audio services may start later during boot;
+        // the engine retries enumeration until they are reachable.
+        svc = ::CreateServiceW(scm, kServiceName, kServiceDisplayName, SERVICE_ALL_ACCESS,
+                               SERVICE_WIN32_OWN_PROCESS, SERVICE_AUTO_START, SERVICE_ERROR_NORMAL,
+                               binaryPath.c_str(), nullptr, nullptr, nullptr, nullptr, L"LocalSystem");
+        if (!svc) {
+            if (errorOut) *errorOut = FormatSystemError(::GetLastError());
+            ::CloseServiceHandle(scm);
+            return false;
+        }
     }
-    const DWORD err = ::GetLastError();
-    if (err != ERROR_SERVICE_DOES_NOT_EXIST) {
-        if (errorOut) *errorOut = FormatSystemError(err);
-        ::CloseServiceHandle(scm);
-        return false;
+
+    SERVICE_DESCRIPTIONW desc{};
+    desc.lpDescription = const_cast<wchar_t*>(kServiceDescription);
+    ::ChangeServiceConfig2W(svc, SERVICE_CONFIG_DESCRIPTION, &desc);
+
+    // Recovery: restart the service on the first, second and subsequent
+    // failures; the failure counter resets after one day without failures.
+    SC_ACTION actions[3] = {};
+    actions[0].Type = SC_ACTION_RESTART;
+    actions[0].Delay = 5000;
+    actions[1].Type = SC_ACTION_RESTART;
+    actions[1].Delay = 10000;
+    actions[2].Type = SC_ACTION_RESTART;
+    actions[2].Delay = 30000;
+    SERVICE_FAILURE_ACTIONSW failure{};
+    failure.dwResetPeriod = 86400;
+    failure.cActions = 3;
+    failure.lpsaActions = actions;
+    ::ChangeServiceConfig2W(svc, SERVICE_CONFIG_FAILURE_ACTIONS, &failure);
+
+    // Also restart when the service stops itself with an error exit code
+    // (not only on crashes). A clean stop (exit code 0) is never restarted,
+    // which is what the tray's "Encerrar" relies on.
+    SERVICE_FAILURE_ACTIONS_FLAG flag{};
+    flag.fFailureActionsOnNonCrashFailures = TRUE;
+    ::ChangeServiceConfig2W(svc, SERVICE_CONFIG_FAILURE_ACTIONS_FLAG, &flag);
+
+    // Default service DACL plus start/stop/pause-continue for interactive
+    // users, so the tray icon can pause, resume and exit without elevation.
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    if (::ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            L"D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)"
+            L"(A;;CCLCSWRPWPDTLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)",
+            SDDL_REVISION_1, &sd, nullptr)) {
+        ::SetServiceObjectSecurity(svc, DACL_SECURITY_INFORMATION, sd);
+        ::LocalFree(sd);
     }
 
-    svc = ::CreateServiceW(
-        scm,
-        kServiceName,
-        kServiceDisplayName,
-        SERVICE_ALL_ACCESS,
-        SERVICE_WIN32_OWN_PROCESS,
-        SERVICE_AUTO_START,
-        SERVICE_ERROR_NORMAL,
-        binaryPath.c_str(),
-        nullptr,
-        nullptr,
-        L"Tcpip\0",                 // service dependencies (minimal)
-        nullptr,
-        L"LocalSystem");
-
-    bool ok = svc != nullptr;
-    if (!ok && errorOut) *errorOut = FormatSystemError(::GetLastError());
-
-    if (ok) {
-        SERVICE_DESCRIPTIONW desc{};
-        desc.lpDescription = const_cast<wchar_t*>(kServiceDescription);
-        ::ChangeServiceConfig2W(svc, SERVICE_CONFIG_DESCRIPTION, &desc);
-
-        // Automatic restart on failure (immediate, 30s, 60s; then reset counter).
-        SC_ACTION actions[3] = {};
-        actions[0].Type = SC_ACTION_RESTART;
-        actions[0].Delay = 1000;
-        actions[1].Type = SC_ACTION_RESTART;
-        actions[1].Delay = 30000;
-        actions[2].Type = SC_ACTION_RESTART;
-        actions[2].Delay = 60000;
-        SERVICE_FAILURE_ACTIONSW failure{};
-        failure.dwResetPeriod = 86400;
-        failure.lpRebootMsg = nullptr;
-        failure.lpCommand = nullptr;
-        failure.cActions = 3;
-        failure.lpsaActions = actions;
-        ::ChangeServiceConfig2W(svc, SERVICE_CONFIG_FAILURE_ACTIONS, &failure);
-
-        ::CloseServiceHandle(svc);
-    }
+    ::CloseServiceHandle(svc);
     ::CloseServiceHandle(scm);
-    return ok;
+    return true;
 }
 
 bool UninstallService(std::wstring* errorOut) {
@@ -158,6 +172,47 @@ bool StopService(std::wstring* errorOut) {
 bool RestartService(std::wstring* errorOut) {
     if (!StopService(errorOut)) return false;
     return StartServiceNow(errorOut);
+}
+
+namespace {
+
+bool SendAndWait(DWORD control, DWORD targetState, std::wstring* errorOut) {
+    SC_HANDLE svc = OpenServiceHandle(kServiceName, SERVICE_PAUSE_CONTINUE | SERVICE_QUERY_STATUS);
+    if (!svc) {
+        if (errorOut) *errorOut = FormatSystemError(::GetLastError());
+        return false;
+    }
+    SERVICE_STATUS status{};
+    bool ok = ::ControlService(svc, control, &status) != FALSE;
+    if (!ok) {
+        if (errorOut) *errorOut = FormatSystemError(::GetLastError());
+    } else {
+        for (int i = 0; i < 40 && status.dwCurrentState != targetState; ++i) {
+            ::Sleep(250);
+            if (!::QueryServiceStatus(svc, &status)) break;
+        }
+        ok = status.dwCurrentState == targetState;
+        if (!ok && errorOut) *errorOut = L"The service did not reach the requested state.";
+    }
+    ::CloseServiceHandle(svc);
+    return ok;
+}
+
+} // namespace
+
+bool PauseService(std::wstring* errorOut) {
+    return SendAndWait(SERVICE_CONTROL_PAUSE, SERVICE_PAUSED, errorOut);
+}
+
+bool ContinueService(std::wstring* errorOut) {
+    return SendAndWait(SERVICE_CONTROL_CONTINUE, SERVICE_RUNNING, errorOut);
+}
+
+bool ServiceExists() {
+    SC_HANDLE svc = OpenServiceHandle(kServiceName, SERVICE_QUERY_STATUS);
+    if (!svc) return false;
+    ::CloseServiceHandle(svc);
+    return true;
 }
 
 bool QueryServiceStatusExState(DWORD* stateOut, std::wstring* descriptionOut) {
@@ -246,11 +301,13 @@ bool PrintServiceStatus(std::wstring* errorOut) {
     if (statusOk) {
         std::wcout << L"State            : " << ServiceStateToString(statusProc.dwCurrentState) << L"\n";
         std::wcout << L"Process ID       : "
-                   << (statusProc.dwCurrentState == SERVICE_RUNNING ? FormatW(L"%lu", statusProc.dwProcessId) : L"(not running)") << L"\n";
-        if (statusProc.dwCurrentState == SERVICE_RUNNING) {
+                   << (statusProc.dwProcessId != 0 ? FormatW(L"%lu", statusProc.dwProcessId) : L"(not running)") << L"\n";
+        if (statusProc.dwProcessId != 0) {
             std::wcout << L"Accept           :";
             if (statusProc.dwControlsAccepted & SERVICE_ACCEPT_STOP) std::wcout << L" STOP";
             if (statusProc.dwControlsAccepted & SERVICE_ACCEPT_SHUTDOWN) std::wcout << L" SHUTDOWN";
+            if (statusProc.dwControlsAccepted & SERVICE_ACCEPT_PRESHUTDOWN) std::wcout << L" PRESHUTDOWN";
+            if (statusProc.dwControlsAccepted & SERVICE_ACCEPT_PAUSE_CONTINUE) std::wcout << L" PAUSE_CONTINUE";
             std::wcout << L"\n";
         }
     }
