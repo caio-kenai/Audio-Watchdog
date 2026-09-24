@@ -5,7 +5,7 @@
 <h1 align="center">Audio Watchdog</h1>
 
 <p align="center">
-  Serviço do Windows que mantém os dispositivos de áudio fora do <b>modo exclusivo</b><br>
+  Serviço do Windows open source que mantém os dispositivos de áudio fora do <b>modo exclusivo</b><br>
   e, opcionalmente, padroniza a taxa de amostragem e a profundidade de bits.
 </p>
 
